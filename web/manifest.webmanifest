@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Photographic Style Port",
   "short_name": "Style Port",
-  "description": "Add iPhone 16-generation Photographic Styles editing state to compatible HEIC photos entirely on your device.",
+  "description": "Add iPhone 16-generation Photographic Styles and iOS 27 Texture/Grain to compatible HEIC photos entirely on your device.",
   "lang": "en",
   "start_url": "./",
   "scope": "./",

@@ -1,6 +1,7 @@
 import { loadProfile } from "./src/zip.js";
 import { patch, selectProfile, VERSION, UNSUPPORTED } from "./src/port.js";
 import { discoverHeic } from "./src/heif.js";
+import { addTexture, hasTexture } from "./src/texture.js";
 import { decodeToRgb, loadLibheif } from "./src/decode.js";
 import { pickLanguage, rememberLanguage, applyLanguage, t } from "./src/i18n.js";
 
@@ -92,25 +93,42 @@ async function handleFile(file) {
     if (sniff(bytes) !== "heic") { ui.set(T("err.notheic"), "err"); return; }
 
     const d = discoverHeic(bytes);
-    const name = selectProfile(profileIndex, d.primaryTiles.length, d.hdrTiles.length);
-    const profile = await getProfile(name);
+    const sep = lang === "zh" ? "、" : ", ";
+    let data, bits, suffix;
+    if (d.stylesItem !== null) {
+      // A native iPhone 16/17 style photo is never re-ported (that would replace its real
+      // style data); it only gets the iOS 27 Texture/Grain set added.
+      if (hasTexture(d.infos)) { ui.set(T("err.hastexture"), "err"); return; }
+      ui.set(T("st.working"));
+      ({ data } = addTexture(bytes));
+      bits = [T("st.native"), T("st.texture")];
+      suffix = "_TextureGrain.HEIC";
+    } else {
+      // No encoder in the browser, so a photo without a thumbnail needs the desktop tool.
+      if (d.thumbnail === null) { ui.set(T("err.nothumb"), "err"); return; }
+      const name = selectProfile(profileIndex, d.primaryTiles.length, d.hdrTiles.length);
+      const profile = await getProfile(name);
 
-    const canDecode = quality.checked ? await ensureDecode(bytes) : false;
-    ui.set(T("st.working"));
-    const opts = canDecode
-      ? { decode: decodeToRgb, sceneStats: "target", lightMaps: "target" }
-      : { sceneStats: "donor" };
-    const { data, report } = await patch(bytes, profile, opts);
-    // patch() degrades rather than failing when the decoder misbehaves, so trust
-    // what it reports it actually did, not what we asked for.
-    if (report.decodeError) console.warn("decoder unavailable:", report.decodeError);
+      const canDecode = quality.checked ? await ensureDecode(bytes) : false;
+      ui.set(T("st.working"));
+      const opts = canDecode
+        ? { decode: decodeToRgb, sceneStats: "target", lightMaps: "target" }
+        : { sceneStats: "donor" };
+      let report;
+      ({ data, report } = await patch(bytes, profile, opts));
+      // patch() degrades rather than failing when the decoder misbehaves, so trust
+      // what it reports it actually did, not what we asked for.
+      if (report.decodeError) console.warn("decoder unavailable:", report.decodeError);
 
-    const bits = [T(report.decoded ? "st.matched" : "st.neutral")];
-    if (report.mattes.added.some((m) => m.startsWith("depth"))) bits.push(T("st.portrait"));
-    else if (report.mattes.transplanted.length) bits.push(T("st.people"));
-    ui.set(`${T("st.ready")} — ${bits.join(lang === "zh" ? "、" : ", ")}`, "ok");
+      bits = [T(report.decoded ? "st.matched" : "st.neutral")];
+      if (report.mattes.added.some((m) => m.startsWith("depth"))) bits.push(T("st.portrait"));
+      else if (report.mattes.transplanted.length) bits.push(T("st.people"));
+      if (report.texture !== "off") bits.push(T("st.texture"));
+      suffix = "_PhotographicStyle.HEIC";
+    }
+    ui.set(`${T("st.ready")} — ${bits.join(sep)}`, "ok");
 
-    const outName = file.name.replace(/\.(heic|heif)$/i, "") + "_PhotographicStyle.HEIC";
+    const outName = file.name.replace(/\.(heic|heif)$/i, "") + suffix;
     // On iPhone the share sheet lands the file straight in Photos; elsewhere a plain
     // download is the shorter route.
     const shareFile = new File([data], outName, { type: "image/heic" });

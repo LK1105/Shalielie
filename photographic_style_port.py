@@ -2,7 +2,8 @@
 """
 Photographic Style Port v0.2.1
 ====================
-Experimental HEIC Photographic Style porter based on the iPhone 15 -> iPhone 16/17
+Experimental HEIC Photographic Style porter (photos from iPhones before the iPhone 16 ->
+iPhone 16/17 Photographic Styles, plus iOS 27 Texture/Grain), based on the iPhone 15 -> iPhone 16/17
 reverse-engineering work in this conversation.
 
 Standalone workflow (no donor HEIC/profile required for normal use):
@@ -105,12 +106,58 @@ import zlib
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
-VERSION = "0.4.4"
+VERSION = "0.5.0"
 
 URI_HDR_GAIN = "urn:com:apple:photo:2020:aux:hdrgainmap"
 URI_LINEAR_THUMB = "tag:apple.com,2023:photo:aux:linearthumbnail"
 URI_STYLE_DELTA = "tag:apple.com,2023:photo:aux:styledeltamap"
 URI_STYLES = "tag:apple.com,2023:photo:metadata:styles"
+URI_TEXTURE_STYLES = "tag:apple.com,2026:photo:metadata:texture_styles"
+
+# v0.5.0: iOS 27 Photos offers the 质感 (Texture) / 颗粒 (Grain) controls when a style photo
+# carries BOTH this metadata item AND iOS 27's 2026 semantic matte set. Phone-tested:
+#   - iPhone 18 donor graph, texture item disabled        -> palette, no Texture/Grain
+#   - iPhone 18 donor graph, 2026 matte URIs unrecognisable -> NO palette at all
+#   - iPhone 16 (v0.4.4) graph + texture item only          -> NO palette at all
+#   - iPhone 18 donor graph, texture item appended last    -> palette + Texture/Grain
+# So the texture item without the mattes breaks the editor outright, and item order is free.
+# These are Apple's exact 216 bytes from iPhone 18 Pro IMG_0309 (a binary plist: Preset
+# Standard, CaptureType LF, CaptureMode Still, PortType PortTypeBack, HardwareModel iPhone19,2,
+# TextureStylePeopleDataVersion 3, FilmGrainSeed 92). Leave HardwareModel alone: rewriting
+# it to iPhone16,1 kept the controls but made white areas glow under some styles.
+TEXTURE_STYLES_BLOB = base64.b64decode(
+    "YnBsaXN0MDDXAQIDBAUGBwgJCgsMDQ5WUHJlc2V0W0NhcHR1cmVUeXBlW0NhcHR1cmVNb2RlWFBv"
+    "cnRUeXBlXUhhcmR3YXJlTW9kZWxfEB1UZXh0dXJlU3R5bGVQZW9wbGVEYXRhVmVyc2lvbl1GaWxt"
+    "R3JhaW5TZWVkWFN0YW5kYXJkUkxGVVN0aWxsXFBvcnRUeXBlQmFja1ppUGhvbmUxOSwyEAMQXAgX"
+    "Hio2P01te4SHjZqlpwAAAAAAAAEBAAAAAAAAAA8AAAAAAAAAAAAAAAAAAACp")
+
+# The 2026 matte set, as IMG_0309 stores it for a scene with no people: every matte is the
+# same empty 768x576 8-bit HEVC frame with one shared ispe/pixi/hvcC, its own auxC, the
+# primary's irot, an auxl to primary + tmap, and an identical FSINC XMP sidecar.
+MATTE_2026_URIS = tuple(f"tag:apple.com,2026:photo:aux:{n}" for n in (
+    "semanticnosematte", "semanticskinmattev2", "semanticnonfaceskinmatte",
+    "semanticlipsmatte", "semanticteethmattev2", "semanticpersonmatte",
+    "semanticglassesmattev2", "semanticeyebrowsmatte", "semantictattoomatte",
+    "semantichandsmatte", "semanticearsmatte", "semanticfaceskinmatte"))
+MATTE_2026_ISPE = bytes.fromhex("0000001469737065000000000000030000000240")
+MATTE_2026_PIXI = bytes.fromhex("0000000e70697869000000000108")
+MATTE_2026_HVCC = bytes.fromhex(
+    "0000006f68766343010408000000bfc8000000005af000fcfcf8f800000b03a00001001740010c01ffff04"
+    "0800000300bfc800000300005a170240a100010021420101040800000300bfc800000300005ac018080241"
+    "6205e49165537020202008a2000100094401c061d2421014c9")
+MATTE_2026_EMPTY = base64.b64decode(
+    "AAAAmCgBrxJdSi5rFrhWizr/aWc5IydgU/X8AAADAAADAAADAAADARsKDFgAAAMAAAMAAAMAAAMAAAacAAAD"
+    "AAADAAADAAADAAADADygAAADAAADAAADAAADAANSAAADAAADAAADAAADAyoAAAMAAAMAAAMAAHTAAAADAAAD"
+    "AAADAAP8AAADAAADAAADAA6oAAADAAADAAADACgg")
+MATTE_2026_XMP = (
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 6.0.0">\n'
+    '   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+    '      <rdf:Description rdf:about=""\n'
+    '            xmlns:fsincMattes="http://ns.apple.com/fsinc/1.0/">\n'
+    '         <fsincMattes:FSINCMatteVersion>0</fsincMattes:FSINCMatteVersion>\n'
+    '      </rdf:Description>\n'
+    '   </rdf:RDF>\n'
+    '</x:xmpmeta>\n').encode("utf-8")
 
 # v0.2 phone-validated neutral Photographic Style spatial baseline (V11).
 # c/d are stored as 32x32 FP16 maps. These constants were the flat-map
@@ -1204,13 +1251,15 @@ def find_items_by_type(infos, item_type: str) -> List[int]:
     return sorted(iid for iid, info in infos.items() if info.get("type") == item_type)
 
 
-def _infe_box(iid: int, item_type: str = "hvc1", content_type: str | None = None) -> bytes:
+def _infe_box(iid: int, item_type: str = "hvc1", content_type: str | None = None,
+              name: str = "") -> bytes:
     """ItemInfoEntry v2, matching the layout the donor profiles already use.
 
-    A 'mime' entry carries its content type as a second null-terminated string.
+    A 'mime' entry carries its content type, and a 'uri ' entry its URI, as a second
+    null-terminated string after the item name.
     """
     payload = (bytes([2, 0, 0, 1]) + iid.to_bytes(2, "big") + b"\x00\x00"
-               + item_type.encode("latin1") + b"\x00")
+               + item_type.encode("latin1") + name.encode("latin1") + b"\x00")
     if content_type is not None:
         payload += content_type.encode("latin1") + b"\x00"
     return _box("infe", payload)
@@ -1295,8 +1344,9 @@ def add_items(meta: bytes, specs: List[dict]):
 
     Each spec may set:
       'key'          identifier used in the returned mapping
-      'item_type'    'hvc1' (default) or 'mime'
-      'content_type' MIME type, for 'mime' items
+      'item_type'    'hvc1' (default), 'mime' or 'uri '
+      'content_type' MIME type for 'mime' items, item URI for 'uri ' items
+      'item_name'    infe item name (Apple names its 'uri ' metadata items 'metadata')
       'uri'          aux URI; an auxC is attached unless 'auxc' is given explicitly
       'auxc'         explicit auxC box, preferred because an auxC can carry aux_subtype
                      data after the URI that rebuilding from the string would discard
@@ -1330,7 +1380,8 @@ def add_items(meta: bytes, specs: List[dict]):
     for n, spec in enumerate(specs):
         iid = next_iid + n
         assigned[spec.get("key", spec.get("uri"))] = iid
-        infes.append(_infe_box(iid, spec.get("item_type", "hvc1"), spec.get("content_type")))
+        infes.append(_infe_box(iid, spec.get("item_type", "hvc1"), spec.get("content_type"),
+                               spec.get("item_name", "")))
         if spec.get("ref_to"):
             refs.append(_ref_box(spec.get("ref_type", "auxl"), iid, spec["ref_to"]))
         ilocs.append(_iloc_entry_v1(iid))
@@ -1383,6 +1434,53 @@ def add_items(meta: bytes, specs: List[dict]):
     for (bo, bs, _bh, bt) in boxes(meta, mo+mh+4, mo+ms):
         rebuilt += swap.get(bt, meta[bo:bo+bs])
     return _box("meta", bytes(rebuilt)), assigned
+
+
+def add_texture_items(meta: bytes, primary: int):
+    """Add the iOS 27 Texture/Grain item set to a meta box: every missing 2026 matte (empty,
+    with its XMP sidecar) plus the texture_styles item, wired as iPhone 18 files wire them.
+
+    Returns (meta, {item_id: payload}, summary). Mattes already present are left alone.
+    """
+    mb = top_box(meta, "meta")
+    props = parse_ipco_ipma(meta, mb)
+    ao, _asz, ah, _ = props["ipma_box"]
+    if int.from_bytes(meta[ao+ah+1:ao+ah+4], "big") & 1:
+        raise PortError("Wide ipma is not supported for adding Texture/Grain items")
+    infos = parse_iinf(meta, mb)
+    present = {aux_uri_for_item(props, i) for i in infos}
+    missing = [u for u in MATTE_2026_URIS if u not in present]
+    targets = [primary] + find_items_by_type(infos, "tmap")[:1]
+    irot = property_for_item(props, primary, "irot")
+    payloads = {}
+
+    if missing:
+        # auxC is descriptive and irot transformative; HEIF wants descriptive properties
+        # listed first, so the auxC boxes are appended here and associated in native order
+        # (ispe, pixi, auxC, hvcC, irot) instead of letting add_items put auxC last.
+        meta, ispe_i = append_ipco_property(meta, MATTE_2026_ISPE)
+        meta, pixi_i = append_ipco_property(meta, MATTE_2026_PIXI)
+        meta, hvcc_i = append_ipco_property(meta, MATTE_2026_HVCC)
+        specs = []
+        for uri in missing:
+            meta, auxc_i = append_ipco_property(meta, _auxc_box(uri))
+            assoc = [(ispe_i, False), (pixi_i, False), (auxc_i, True), (hvcc_i, True)]
+            if irot is not None:
+                assoc.append((irot["index"], True))
+            specs.append({"key": uri, "reuse": assoc, "ref_type": "auxl", "ref_to": targets})
+        meta, mattes = add_items(meta, specs)
+        payloads.update({iid: MATTE_2026_EMPTY for iid in mattes.values()})
+        meta, sidecars = add_items(meta, [
+            {"key": f"xmp:{uri}", "item_type": "mime", "content_type": "application/rdf+xml",
+             "ref_type": "cdsc", "ref_to": [mattes[uri]]} for uri in missing])
+        payloads.update({iid: MATTE_2026_XMP for iid in sidecars.values()})
+
+    meta, tex = add_items(meta, [{
+        "key": "texture", "item_type": "uri ", "item_name": "metadata",
+        "content_type": URI_TEXTURE_STYLES, "ref_type": "cdsc", "ref_to": targets}])
+    payloads[tex["texture"]] = TEXTURE_STYLES_BLOB
+    summary = f"added #{tex['texture']} -> {targets}, {len(missing)} 2026 mattes"
+    return meta, payloads, summary
 
 
 def aux_uri_for_item(propinfo, iid: int):
@@ -2140,15 +2238,26 @@ def encode_target_linear_thumbnail(decoded: Path, work: Path, out_w: int, out_h:
     at display time. v0.2.1 hardcoded a single clockwise turn here, which silently produced
     a rotated and aspect-squashed thumbnail for any target not carrying irot=270.
     """
+    return encode_hevc_still(decoded, work, out_w, out_h, angle, mirror,
+                             name="linearthumb", ten_bit=True)
+
+
+def encode_hevc_still(decoded: Path, work: Path, out_w: int, out_h: int,
+                      angle: int = 0, mirror=None, name: str = "still", ten_bit: bool = False):
+    """Encode one HEVC frame in the target's stored orientation; returns (hvcC, sample, NALs).
+
+    ten_bit selects Main10 (what Apple ships for the linearthumbnail); otherwise 8-bit Main,
+    matching Apple's ordinary thumbnail.
+    """
     ffmpeg = require_cmd("ffmpeg")
-    mp4 = work / "linearthumb.mp4"
+    mp4 = work / f"{name}.mp4"
     vf = ",".join(raw_orientation_filters(angle, mirror)
                   + [f"scale={out_w}:{out_h}:flags=lanczos"])
     enc = subprocess.run([
         ffmpeg, "-y", "-loglevel", "error", "-i", str(decoded),
         "-vf", vf, "-frames:v", "1",
-        "-c:v", "libx265", "-pix_fmt", "yuv420p10le",
-        "-profile:v", "main10", "-tag:v", "hvc1",
+        "-c:v", "libx265", "-pix_fmt", "yuv420p10le" if ten_bit else "yuv420p",
+        "-profile:v", "main10" if ten_bit else "main", "-tag:v", "hvc1",
         "-x265-params", "info=0", "-movflags", "+faststart", str(mp4)
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if enc.returncode != 0:
@@ -2236,8 +2345,10 @@ def discover_target(data: bytes):
     disc = discover_heic(data)
     if disc["hdr_grid"] is None or not disc["hdr_tiles"]:
         raise PortError("Target has no HDR gain-map grid")
-    if disc["thumbnail"] is None or disc["exif_item"] is None:
-        raise PortError("Target thumbnail/Exif not found")
+    # A missing thumbnail is allowed: patch synthesizes one from the primary. Files re-saved
+    # by iOS (they carry an extra XMP item and no tmap) have been seen without one.
+    if disc["exif_item"] is None:
+        raise PortError("Target Exif not found")
     return disc
 
 
@@ -2245,7 +2356,23 @@ def cmd_patch(args):
     target = Path(args.target)
     output = Path(args.output)
     target_data = target.read_bytes()
+    # v0.5.0: a photo that already has native Photographic Style data (iPhone 16 and later)
+    # is never re-ported - that would replace its real style data with the donor's neutral
+    # one. It only gets the iOS 27 Texture/Grain item added.
+    if discover_heic(target_data)["styles_item"] is not None:
+        if args.texture == "off":
+            raise PortError("Target already has native Photographic Style data; nothing to do "
+                            "with --texture off")
+        if args.profile:
+            print("NOTE: --profile ignored; the target already has native Photographic Style data")
+        print("Native Photographic Style detected: adding Texture/Grain only (no port)")
+        write_add_texture(target, output, args.report, args.zip)
+        return
     td = discover_target(target_data)
+    synth_thumb = td["thumbnail"] is None
+    if synth_thumb and args.linear_thumb == "reuse-thumbnail":
+        raise PortError("Target has no thumbnail to reuse; use --linear-thumb generate, "
+                        "which also synthesizes the missing thumbnail")
 
     if args.profile:
         profile_path = Path(args.profile)
@@ -2277,7 +2404,9 @@ def cmd_patch(args):
     for donor_iid, target_iid in zip(manifest["donor_hdr_tiles"], td["hdr_tiles"]):
         payloads[int(donor_iid)] = extract_item(target_data, target_iloc, int(target_iid))
 
-    payloads[int(manifest["donor_thumbnail_item"])] = extract_item(target_data, target_iloc, int(td["thumbnail"]))
+    if not synth_thumb:
+        payloads[int(manifest["donor_thumbnail_item"])] = extract_item(
+            target_data, target_iloc, int(td["thumbnail"]))
     target_exif_payload = extract_item(target_data, target_iloc, int(td["exif_item"]))
     mn54_type = int(manifest.get("smartstyle_makernote_type", 7))
     target_exif_payload = inject_apple_makernote_tag(target_exif_payload, mn54, 0x54, mn54_type)
@@ -2297,15 +2426,18 @@ def cmd_patch(args):
 
     # Target ordinary thumbnail is also copied as compressed HEVC; pair it with its
     # target hvcC (and colr when it uses a distinct property).
+    # A target without a thumbnail gets one encoded below, once the primary is decoded; it
+    # keeps the donor thumbnail's colr slot, which is the primary's (just transplanted).
     donor_thumb = int(manifest["donor_thumbnail_item"])
-    target_thumb = int(td["thumbnail"])
-    target_thumb_hvcc = property_box_bytes(target_data, td["props"], target_thumb, "hvcC")
-    target_thumb_colr = property_box_bytes(target_data, td["props"], target_thumb, "colr")
-    meta = replace_item_property_with_source(meta, donor_thumb, "hvcC", target_thumb_hvcc)
-    # Usually the thumbnail shares the primary colr property. If it is a separate
-    # donor property this call updates it; if already shared it simply rewrites the
-    # same slot with the same target box.
-    meta = replace_item_property_with_source(meta, donor_thumb, "colr", target_thumb_colr)
+    if not synth_thumb:
+        target_thumb = int(td["thumbnail"])
+        target_thumb_hvcc = property_box_bytes(target_data, td["props"], target_thumb, "hvcC")
+        target_thumb_colr = property_box_bytes(target_data, td["props"], target_thumb, "colr")
+        meta = replace_item_property_with_source(meta, donor_thumb, "hvcC", target_thumb_hvcc)
+        # Usually the thumbnail shares the primary colr property. If it is a separate
+        # donor property this call updates it; if already shared it simply rewrites the
+        # same slot with the same target box.
+        meta = replace_item_property_with_source(meta, donor_thumb, "colr", target_thumb_colr)
 
     # HDR gain-map tiles may also carry HEVC parameter sets outside the payload.
     # Replace the donor HDR-tile hvcC when both sides expose one.
@@ -2522,6 +2654,19 @@ def cmd_patch(args):
         people_report["people"] = ("target auxiliaries carried" if carried
                                    else "none (target has no mattes or depth)")
 
+    # v0.5.0: add the iOS 27 Texture/Grain set (2026 mattes + texture_styles). Appending keeps
+    # every existing property index, so the manifest's linearthumbnail hvcC index still holds.
+    # An external iOS 27 donor profile brings its own set.
+    port_infos = parse_iinf(meta, top_box(meta, "meta"))
+    existing_tex = [i for i, info in port_infos.items() if info.get("uri") == URI_TEXTURE_STYLES]
+    texture_report = {"texture_styles": "off"}
+    if args.texture == "on" and existing_tex:
+        texture_report = {"texture_styles": f"from profile #{existing_tex[0]}"}
+    elif args.texture == "on":
+        meta, tex_payloads, summary = add_texture_items(meta, int(manifest["donor_primary_item"]))
+        payloads.update(tex_payloads)
+        texture_report = {"texture_styles": summary}
+
     # The linearthumbnail must be generated at the donor item's declared ispe and in the
     # target's stored orientation, since it inherits the irot transplanted just above.
     donor_props = parse_ipco_ipma(meta, top_box(meta, "meta"))
@@ -2541,11 +2686,22 @@ def cmd_patch(args):
 
     needs_decode = (args.linear_thumb == "generate"
                     or args.scene_stats in ("target", "tone-only")
-                    or args.light_maps == "target")
+                    or args.light_maps == "target"
+                    or synth_thumb)
     lt_report = {"linear_thumb_mode": args.linear_thumb}
+    thumb_report = {"thumbnail": "target"}
     with tempfile.TemporaryDirectory(prefix="photographic-style-port-") as tmp:
         work = Path(tmp)
         decoded = decode_target_primary(target, work) if needs_decode else None
+        if synth_thumb:
+            # Encoded at the donor thumbnail's declared ispe and in stored orientation,
+            # because the thumbnail shares the irot transplanted from the target primary.
+            th_w, th_h = dimensions_for_item(donor_props, donor_thumb)
+            if not th_w or not th_h:
+                raise PortError("Donor profile thumbnail has no ispe property")
+            thumb_hvcc, payloads[donor_thumb], _ = encode_hevc_still(
+                decoded, work, th_w, th_h, target_angle, target_mirror, name="thumbnail")
+            thumb_report = {"thumbnail": "synthesized", "thumbnail_size": [th_w, th_h]}
         if args.linear_thumb == "generate":
             hvcc, lt_sample, nal_types = encode_target_linear_thumbnail(
                 decoded, work, lt_w, lt_h, target_angle, target_mirror)
@@ -2565,6 +2721,8 @@ def cmd_patch(args):
         light_maps = (target_light_maps(decoded, target_angle, target_mirror)
                       if args.light_maps == "target" else None)
     payloads[int(manifest["donor_linear_thumb_item"])] = lt_sample
+    if synth_thumb:
+        meta = replace_item_property_with_source(meta, donor_thumb, "hvcC", thumb_hvcc)
 
     if args.linear_thumb == "reuse-thumbnail":
         # ispe is dedicated to the linearthumbnail, so it can be replaced in place. pixi is
@@ -2675,6 +2833,8 @@ def cmd_patch(args):
     report.update(people_report)
     report.update(tmap_report)
     report.update(lt_report)
+    report.update(thumb_report)
+    report.update(texture_report)
     # The report is always built -- the run summary below reads from it -- but it is only
     # written to disk when asked for. --zip carries it inside the archive without leaving a
     # loose file behind.
@@ -2702,6 +2862,10 @@ def cmd_patch(args):
     else:
         print(f"  linear-thumbnail: reused target thumbnail item "
               f"{lt_report['linear_thumb_reused_from']} ({lt_w}x{lt_h}, no encoder used)")
+    print(f"  texture/grain (iOS 27): {texture_report['texture_styles']}")
+    if synth_thumb:
+        print(f"  thumbnail: target had none, synthesized "
+              f"{thumb_report['thumbnail_size'][0]}x{thumb_report['thumbnail_size'][1]}")
     if tmap_report.get("tmap_item") is not None:
         was, now = tmap_report["tmap_ispe_was"], tmap_report["tmap_ispe"]
         print(f"  tmap display size: {was[0]}x{was[1]} -> {now[0]}x{now[1]}"
@@ -2727,6 +2891,94 @@ def cmd_patch(args):
               f"{len(people_report.get('sidecars_refreshed', []))} refreshed")
     for w in warnings:
         print(f"  WARNING: {w}")
+
+
+def add_texture_bytes(data: bytes):
+    """v0.5.0: give a native iPhone 16+ Photographic Style photo the iOS 27 Texture/Grain
+    controls by inserting only the Texture/Grain item set (see add_texture_items). Nothing is
+    ported: every existing item payload stays byte-identical, only meta grows and the iloc
+    offsets move with it.
+
+    Returns (result_bytes, info dict).
+    """
+    disc = discover_heic(data)
+    if disc["styles_item"] is None:
+        raise PortError("Input has no native Photographic Style (metadata:styles item); "
+                        "use 'patch' to port a style onto it instead")
+    if any(i.get("uri") == URI_TEXTURE_STYLES for i in disc["infos"].values()):
+        raise PortError("Input already carries texture_styles (Texture/Grain is already offered)")
+    iloc = disc["iloc"]
+    # add_items writes version-1 iloc entries with 4-byte offset/length and no base offset or
+    # extent index, and version-0 iref entries: the layout Apple writes. Refuse anything else.
+    if (iloc["version"], iloc["offset_size"], iloc["length_size"],
+            iloc["base_offset_size"], iloc["index_size"]) != (1, 4, 4, 0, 0):
+        raise PortError("Unsupported iloc layout; only Apple's native iloc v1 4/4/0/0 is handled")
+    ro, _rs, rh, _ = find_child(meta_children(data, disc["meta"]), "iref")
+    if data[ro+rh] != 0:
+        raise PortError("Unsupported iref version; only version 0 (16-bit item ids) is handled")
+    mo, ms, _mh, _ = disc["meta"]
+    external = {iid: it for iid, it in iloc["items"].items()
+                if it["construction_method"] == 0 and it["extents"]}
+    if any(e["offset"] < mo + ms for it in external.values() for e in it["extents"]):
+        raise PortError("An item payload sits before the end of meta; cannot shift offsets safely")
+
+    new_meta, new_payloads, summary = add_texture_items(data[mo:mo+ms], disc["primary"])
+    delta = len(new_meta) - ms
+
+    # New payloads travel in one small mdat appended after everything else.
+    meta_mut = bytearray(new_meta)
+    niloc = parse_iloc(meta_mut, top_box(meta_mut, "meta"))
+    tail = bytes(data[mo+ms:])
+    cursor = mo + len(new_meta) + len(tail) + 8
+    extra = bytearray()
+    for iid in sorted(new_payloads):
+        e = niloc["items"][iid]["extents"][0]
+        meta_mut[e["offset_pos"]:e["offset_pos"]+4] = (cursor + len(extra)).to_bytes(4, "big")
+        meta_mut[e["length_pos"]:e["length_pos"]+4] = len(new_payloads[iid]).to_bytes(4, "big")
+        extra += new_payloads[iid]
+    if cursor + len(extra) >= 2**32:
+        raise PortError("File too large for 32-bit iloc offsets")
+    for iid, it in niloc["items"].items():
+        if iid in external:
+            for e in it["extents"]:
+                meta_mut[e["offset_pos"]:e["offset_pos"]+4] = (e["offset"] + delta).to_bytes(4, "big")
+    result = (bytes(data[:mo]) + bytes(meta_mut) + tail
+              + (8 + len(extra)).to_bytes(4, "big") + b"mdat" + bytes(extra))
+
+    # Self-check before writing: every original payload must come back byte-identical, and
+    # every new one must read back as written.
+    check = discover_heic(result)
+    for iid in external:
+        if extract_item(result, check["iloc"], iid) != extract_item(data, iloc, iid):
+            raise PortError(f"Self-check failed: item {iid} payload changed")
+    for iid, blob in new_payloads.items():
+        if extract_item(result, check["iloc"], iid) != blob:
+            raise PortError(f"Self-check failed: new item {iid} unreadable")
+    return result, {"mode": "add-texture", "texture_styles": summary,
+                    "meta_growth_bytes": delta, "payloads_verified": len(external)}
+
+
+def write_add_texture(src: Path, output: Path, report: bool = False, zip_out: bool = False):
+    result, info = add_texture_bytes(src.read_bytes())
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(result)
+    info = {"tool_version": VERSION, "target": src.name, "output": output.name,
+            "output_sha256": sha256_bytes(result), **info}
+    report_json = json.dumps(info, indent=2)
+    if report:
+        output.with_suffix(output.suffix + ".report.json").write_text(report_json, encoding="utf-8")
+    if zip_out:
+        with zipfile.ZipFile(output.with_suffix(".zip"), "w", compression=zipfile.ZIP_DEFLATED) as z:
+            z.write(output, arcname=output.name)
+            z.writestr(output.name + ".report.json", report_json)
+    print(f"Created HEIC with Texture/Grain: {output}")
+    print(f"  texture/grain (iOS 27): {info['texture_styles']}, meta +{info['meta_growth_bytes']} bytes")
+    print(f"  {info['payloads_verified']} existing item payloads verified byte-identical")
+    print(f"  SHA-256: {info['output_sha256']}")
+
+
+def cmd_add_texture(args):
+    write_add_texture(Path(args.input), Path(args.output))
 
 
 def cmd_profiles(args):
@@ -2785,7 +3037,7 @@ def build_parser():
     a.set_defaults(func=cmd_extract_donor)
 
     a = sub.add_parser("patch", help="Patch target HEIC using an auto-selected built-in profile")
-    a.add_argument("target", help="Target iPhone 15/16 HEIC")
+    a.add_argument("target", help="Target HEIC: an iPhone photo without styles (pre-iPhone 16), or a native iPhone 16/17 style photo")
     a.add_argument("output", help="Output HEIC")
     a.add_argument("--profile", help="Optional external donor profile ZIP; otherwise auto-select a built-in profile")
     a.add_argument("--report", action="store_true",
@@ -2808,7 +3060,18 @@ def build_parser():
                         "'reuse-thumbnail' reuses the target's existing ordinary thumbnail "
                         "and needs no encoder - experimental, since that is 8-bit Main Still "
                         "Picture where Apple ships 10-bit Main10")
+    a.add_argument("--texture", choices=("on", "off"), default="on",
+                   help="Add the iOS 27 Texture/Grain item set (texture_styles + the 2026 "
+                        "semantic mattes) so Photos offers the Texture/Grain controls (default "
+                        "on); 'off' reproduces the v0.4.4 item graph")
     a.set_defaults(func=cmd_patch)
+
+    a = sub.add_parser("add-texture",
+                       help="Add only the iOS 27 Texture/Grain item to a photo that already "
+                            "has native Photographic Style data (iPhone 16 and later)")
+    a.add_argument("input", help="Native Photographic Style HEIC")
+    a.add_argument("output", help="Output HEIC")
+    a.set_defaults(func=cmd_add_texture)
 
     a = sub.add_parser("profiles", help="List embedded built-in profiles")
     a.set_defaults(func=cmd_profiles)
