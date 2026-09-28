@@ -314,11 +314,14 @@ export function repointItemProperty(meta, iid, oldIndex, newIndex) {
   return out;
 }
 
-const infeBox = (iid, itemType = "hvc1", contentType = null) => {
+// A 'mime' entry carries its content type, and a 'uri ' entry its URI, as a second
+// null-terminated string after the item name.
+const infeBox = (iid, itemType = "hvc1", contentType = null, name = "") => {
   const t = new Uint8Array(4);
   for (let i = 0; i < 4; i++) t[i] = itemType.charCodeAt(i);
-  const parts = [new Uint8Array([2, 0, 0, 1]), be(iid, 2), new Uint8Array([0, 0]), t,
-    new Uint8Array([0])];
+  const n = new Uint8Array(name.length + 1);
+  for (let i = 0; i < name.length; i++) n[i] = name.charCodeAt(i);
+  const parts = [new Uint8Array([2, 0, 0, 1]), be(iid, 2), new Uint8Array([0, 0]), t, n];
   if (contentType !== null) {
     const c = new Uint8Array(contentType.length + 1);
     for (let i = 0; i < contentType.length; i++) c[i] = contentType.charCodeAt(i);
@@ -368,7 +371,7 @@ export function addItems(meta, specs) {
   specs.forEach((spec, n) => {
     const iid = nextIid + n;
     assigned.set(spec.key ?? spec.uri, iid);
-    infes.push(infeBox(iid, spec.itemType || "hvc1", spec.contentType ?? null));
+    infes.push(infeBox(iid, spec.itemType || "hvc1", spec.contentType ?? null, spec.itemName || ""));
     if (spec.refTo && spec.refTo.length) refs.push(refBox(spec.refType || "auxl", iid, spec.refTo));
     ilocs.push(ilocEntryV1(iid));
     const assoc = [...(spec.reuse || [])];

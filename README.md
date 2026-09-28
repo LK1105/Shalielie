@@ -1,9 +1,14 @@
 # Photographic Style Port
 
-Current version: v0.4.4
+Current version: v0.5.0
 
-This is an experimental tool that gives an iPhone HEIC the metadata an iPhone 16/17
+This is an experimental tool that gives a HEIC from an iPhone **before the iPhone 16** (iPhone 15,
+14, 13 … — any model whose photos match a supported tile layout) the metadata an iPhone 16/17
 photo carries, so that Apple Photos offers the **Photographic Styles** palette (风格/ or most people would simply call it 调色盘) on it.
+
+Since v0.5 it also adds the **iOS 27 Texture/Grain** controls (质感/颗粒) that Apple introduced
+with the iPhone 18 Pro — to ported photos, and to native iPhone 16/17 style photos, which get
+only those controls added and are otherwise left byte-identical.
 
 It is an independent HEIC interoperability tool, not an Apple-supported format converter. It
 works by reading and rewriting the ISO-BMFF item graph of photo files, and it is experimental.
@@ -27,6 +32,10 @@ There is a browser build that needs no install and no command line — drop a ph
 patched one back. It runs entirely on your machine; nothing is uploaded.
 
 **https://nathanatgit.github.io/Shalielie/**
+
+The browser build includes v0.5's Texture/Grain and native-photo mode. The one thing it cannot
+do is patch a photo without an embedded thumbnail, because the browser has no HEVC encoder to
+create one; use the command-line tool for those.
 
 It is the same porting logic as the Python tool, checked against it byte for byte — see
 [`web/README.md`](web/README.md) for how that is verified, and for the two iPhone quirks it
@@ -58,7 +67,7 @@ photographic-style-port patch IN.HEIC OUT.HEIC \
 ```
 
 The `Build binary release` GitHub Actions workflow builds and smoke-tests all four targets on
-manual runs. Pushing a tag such as `v0.4.4` also creates the GitHub release and uploads the four
+manual runs. Pushing a tag such as `v0.5.0` also creates the GitHub release and uploads the four
 archives plus `SHA256SUMS.txt`. The tag must match the versions declared in `pyproject.toml`,
 `photographic_style_port.py`, and this README.
 
@@ -97,8 +106,18 @@ uv run photographic_style_port.py patch INPUT.HEIC OUTPUT.HEIC
 ```
 
 Copy the output to your iPhone and open it in Photos — Edit should now offer the style
-palette. Send it as a **file**, not through the Photo Library, which re-encodes HEIC to JPEG
-and strips everything this tool adds.
+palette, with Texture/Grain on iOS 27. Send it as a **file**, not through the Photo Library,
+which re-encodes HEIC to JPEG and strips everything this tool adds.
+
+`patch` chooses what to do from the photo:
+
+| Photo                                        | What happens                                              |
+| -------------------------------------------- | --------------------------------------------------------- |
+| No style data (iPhones before the iPhone 16) | full port, plus Texture/Grain                             |
+| Native style data (iPhone 16/17)             | Texture/Grain added only; everything else byte-identical  |
+| Already has Texture/Grain (iPhone 18)        | refused, nothing to do                                    |
+
+`add-texture IN.HEIC OUT.HEIC` runs the second route explicitly.
 
 Useful flags:
 
@@ -109,6 +128,7 @@ Useful flags:
 | `--light-maps target`            | rebuild tone maps from your photo — most likely to improve results |
 | `--scene-stats donor`            | fall back to donor tone anchors if colours look wrong               |
 | `--linear-thumb reuse-thumbnail` | skip the encoder entirely                                           |
+| `--texture off`                  | leave out the iOS 27 Texture/Grain items (v0.4.4 output)            |
 
 By default the only file written is the output HEIC. A run summary is printed to the terminal;
 pass `--report` or `--zip` if you want it saved as JSON too.
@@ -167,12 +187,14 @@ Your photo's pixels are untouched — the primary image, HDR gain map, thumbnail
 stay yours, and the decoded output is pixel-identical to the input. What gets added is the
 style machinery Photos looks for: the style plist and Apple MakerNote tag `0x54` from a
 normalized donor profile, plus a `linearthumbnail`, scene statistics and light maps computed
-from your own photo.
+from your own photo. For Texture/Grain it adds iOS 27's `texture_styles` item together with the
+12 empty 2026 semantic mattes that must accompany it.
 
 ## Limits
 
-- **Photos without an embedded thumbnail are rejected**, and only two tile layouts (48/12 and
-  45/15) have built-in profiles.
+- **Only two tile layouts (48/12 and 45/15) have built-in profiles.** Photos without an
+  embedded thumbnail are supported since v0.5, but need the default (encoder) mode.
+- **Texture/Grain needs iOS 27** on the phone that opens the photo.
 - **Not validated by Apple, and results vary by photo.** Try the flags above before concluding
   it does not work.
 - **A normal photo cannot be turned into a "people" photo.** Portrait data is only ever copied

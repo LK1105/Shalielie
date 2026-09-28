@@ -86,5 +86,16 @@ for (const name of cases) {
     fail++;
   }
 }
+// Native iPhone 16/17 style photos: add-texture inserts items without porting, so the JS
+// result must be byte-identical to the Python one.
+const { addTexture } = await import("../../web/src/texture.js");
+for (const name of ["IMG_5096", "IMG_5102", "IMG_5165", "IMG_5168"]) {
+  const target = new Uint8Array(readFileSync(`${ROOT}Smartstyle/${name}.HEIC`));
+  const { data: js } = addTexture(target);
+  const py = new Uint8Array(readFileSync(`${ROOT}tests/web/ref/${name}_addtex_ref.HEIC`));
+  if (sha(js) === sha(py)) { console.log(`  ${name} add-texture: BYTE-IDENTICAL (${js.length})`); pass++; }
+  else { console.log(`  ${name} add-texture: DIFFERS (${js.length} vs ${py.length})`); fail++; }
+}
+
 console.log(`\n${pass} matching, ${fail} failing`);
 process.exit(fail ? 1 : 0);

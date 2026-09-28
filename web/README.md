@@ -128,12 +128,16 @@ node tests/web/check-pwa.mjs      # manifest, icons, and offline asset coverage
 ```
 
 ```
-IMG_5037: BYTE-IDENTICAL (2427596)
-IMG_5048: BYTE-IDENTICAL (1810154)
-IMG_5049: BYTE-IDENTICAL (1858089)
+IMG_5037: BYTE-IDENTICAL (2436545)
+IMG_5048: BYTE-IDENTICAL (1819103)
+IMG_5049: BYTE-IDENTICAL (1867038)
 IMG_4995: EQUIVALENT (styles plist repacked, all items match)
 IMG_4997: EQUIVALENT (styles plist repacked, all items match)
 IMG_4999: EQUIVALENT (styles plist repacked, all items match)
+IMG_5096 add-texture: BYTE-IDENTICAL (3955304)
+IMG_5102 add-texture: BYTE-IDENTICAL (1562445)
+IMG_5165 add-texture: BYTE-IDENTICAL (1977002)
+IMG_5168 add-texture: BYTE-IDENTICAL (2002601)
 ```
 
 Three are byte-for-byte identical. The other three differ only in how the styles plist is
@@ -147,7 +151,12 @@ tests only run once you generate your own:
 ```bash
 python photographic_style_port.py patch IN.HEIC tests/web/ref/NAME_ref.HEIC \
   --linear-thumb reuse-thumbnail --scene-stats donor --light-maps flat
+python photographic_style_port.py add-texture Smartstyle/NAME.HEIC tests/web/ref/NAME_addtex_ref.HEIC
 ```
+
+The four `add-texture` cases cover v0.5's native-photo mode (`src/texture.js`): an iPhone 16/17
+style photo gets only the iOS 27 Texture/Grain set, so its output must be byte-identical to
+Python's.
 
 ## Layout
 
@@ -160,6 +169,7 @@ python photographic_style_port.py patch IN.HEIC tests/web/ref/NAME_ref.HEIC \
 | `src/styles.js` | Scene statistics, `c`/`d` light maps, person-mask hint |
 | `src/zip.js` | Donor profile reader, via `DecompressionStream` |
 | `src/port.js` | The patch pipeline |
+| `src/texture.js` | iOS 27 Texture/Grain set (texture_styles + 2026 mattes), and native-photo insertion |
 | `src/decode.js` | Optional libheif decoding, isolated behind one callback |
 | `profiles/` | The two donor profiles, exported from the Python build |
 
@@ -168,5 +178,7 @@ exists — which is also why `port.js` runs unchanged under Node for the compari
 
 ## Not supported
 
-Photos without an embedded thumbnail or HDR gain map are rejected, as in the Python tool, and
-only the two known tile layouts (48/12 and 45/15) have profiles.
+Photos without an HDR gain map are rejected, and only the two known tile layouts (48/12 and
+45/15) have profiles. Photos without an embedded thumbnail are also rejected here, with a message
+pointing to the command-line tool: since v0.5 the Python tool encodes a missing thumbnail, but
+the browser has no HEVC encoder to do the same.

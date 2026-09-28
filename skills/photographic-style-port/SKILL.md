@@ -1,12 +1,21 @@
 ---
 name: photographic-style-port
-description: Patch an iPhone HEIC so Apple Photos offers the Photographic Styles palette (风格 / 调色盘). Use when the user asks to add, enable, port or restore Photographic Styles on a .HEIC photo, to make an iPhone 15 photo stylable like an iPhone 16/17 one, or to inspect a HEIC's style-related metadata.
+description: Patch an iPhone HEIC so Apple Photos offers the Photographic Styles palette (风格 / 调色盘) and the iOS 27 Texture/Grain (质感/颗粒) controls. Use when the user asks to add, enable, port or restore Photographic Styles on a .HEIC photo, to make a photo from an iPhone before the iPhone 16 stylable like an iPhone 16/17 one, to give an iPhone 16/17 photo the iPhone 18 Texture/Grain controls, or to inspect a HEIC's style-related metadata.
 ---
 
 # Photographic Style Port
 
-CLI that rewrites a HEIC's metadata so Apple Photos offers the Photographic Styles palette.
-Pixels are never altered — the decoded output is identical to the input.
+CLI that rewrites a HEIC's metadata so Apple Photos offers the Photographic Styles palette,
+plus iOS 27's Texture/Grain controls. Pixels are never altered — the decoded output is
+identical to the input.
+
+`patch` picks its route from the photo itself:
+
+- **No style data** (iPhones before the iPhone 16, or a re-saved copy): full port, plus Texture/Grain.
+- **Native style data** (iPhone 16/17): nothing is ported; only the Texture/Grain items are
+  added and every existing payload stays byte-identical. `add-texture IN OUT` does the same
+  explicitly.
+- **Already has Texture/Grain** (iPhone 18 / iOS 27): refused — nothing to do.
 
 ## Before the first run
 
@@ -49,6 +58,8 @@ just report it. Useful fields:
 - `output_sha256` — identifies the result
 - `linear_thumb_mode` — `generate` or `reuse-thumbnail`
 - `mattes_transplanted` / `mattes_added` — Portrait data carried over
+- `texture_styles` — whether the iOS 27 Texture/Grain set was added (`--texture off` skips it)
+- `thumbnail` — `target`, or `synthesized` when the photo had none and one was encoded
 - `warnings` — non-fatal issues worth relaying to the user
 
 For batches, loop one file at a time and report per-file outcomes; there is no batch mode and
@@ -62,7 +73,9 @@ clean up any `--report` output you generated purely for your own verification.
 | Message | Meaning |
 |---|---|
 | `Required command not found in PATH: heif-convert` / `ffmpeg` | Switch to no-encoder mode, or set up the tool. |
-| `Target thumbnail/Exif not found` | This photo cannot be patched. Not fixable by flags — say so and move on. |
+| `Target Exif not found` | This photo cannot be patched. Not fixable by flags — say so and move on. |
+| `Target has no thumbnail to reuse` | The photo lacks a thumbnail, so no-encoder mode cannot run; default mode encodes one (needs ffmpeg). |
+| `Input already carries texture_styles` | Already has Texture/Grain (an iPhone 18 photo, or already patched). Nothing to do. |
 | `No built-in profile matches target layout N primary/M HDR` | Unsupported tile layout. Needs `extract-donor` against an iPhone 16/17 photo with the same layout. |
 
 ## Other commands
@@ -70,6 +83,7 @@ clean up any `--report` output you generated purely for your own verification.
 ```bash
 uv run photographic_style_port.py profiles              # built-in donor profiles, as JSON
 uv run photographic_style_port.py inspect PHOTO.HEIC    # style-related metadata, as JSON
+uv run photographic_style_port.py add-texture IN.HEIC OUT.HEIC   # native style photo -> + Texture/Grain
 ```
 
 Use `inspect` before patching when diagnosing why a photo behaves unexpectedly.

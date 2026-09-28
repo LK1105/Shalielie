@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "photographic-style-port-";
-const CACHE_NAME = `${CACHE_PREFIX}v1`;
+const CACHE_NAME = `${CACHE_PREFIX}v2`;
 
 // Keep this list self-contained so a successful installation guarantees that
 // the converter and both supported donor profiles can run without a network.
@@ -22,6 +22,7 @@ const APP_SHELL = [
   "./src/i18n.js",
   "./src/port.js",
   "./src/styles.js",
+  "./src/texture.js",
   "./src/zip.js"
 ];
 

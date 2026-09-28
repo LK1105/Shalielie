@@ -15,12 +15,13 @@ import {
   MATTE_URIS, MATTE_URI_SET, DEPTH_URI,
 } from "./heif.js";
 import { injectAppleMakerNoteTag } from "./exif.js";
+import { addTextureItems, hasTexture } from "./texture.js";
 import {
   applySceneStatistics, applyLightMaps, setPersonMasksValid, buildLightMaps,
   linearLumaFromRgb, LIGHTMAP_N,
 } from "./styles.js";
 
-export const VERSION = "0.4.4-web";
+export const VERSION = "0.5.0-web";
 
 // Every rejection a visitor can hit reduces to one of two things: the file is not a
 // HEIC at all, or it is a HEIC this build cannot handle. Nothing else is actionable.
@@ -38,6 +39,7 @@ export function selectProfile(index, primaryTiles, hdrTiles) {
  * @param profile     from loadProfile()
  * @param opts.decode async (targetData, {width,height,angle,mirror}) -> Uint8Array RGB,
  *                    or null to skip target-derived statistics and light maps
+ * @param opts.texture false to leave out the iOS 27 Texture/Grain set (v0.4.4 output)
  */
 export async function patch(targetData, profile, opts = {}) {
   const td = discoverHeic(targetData);
@@ -242,6 +244,20 @@ export async function patch(targetData, profile, opts = {}) {
       meta = m4;
       for (const s of sidecarSpecs) payloads.set(sc.get(s.key), s._payload);
       report.sidecarsAdded = sidecarSpecs.length;
+    }
+  }
+
+  // iOS 27 Texture/Grain set (2026 mattes + texture_styles). Appending keeps every existing
+  // property index, so the manifest's linearthumbnail hvcC index below still holds.
+  report.texture = "off";
+  if (opts.texture !== false) {
+    const portInfos = parseIinf(meta, topBox(meta, "meta"));
+    if (hasTexture(portInfos)) report.texture = "from profile";
+    else {
+      const [m6, texPayloads, summary] = addTextureItems(meta, Number(manifest.donor_primary_item));
+      meta = m6;
+      for (const [iid, blob] of texPayloads) payloads.set(iid, blob);
+      report.texture = summary;
     }
   }
 

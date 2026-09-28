@@ -22,7 +22,7 @@ BUILD = HERE / "build"
 BUILD.mkdir(exist_ok=True)
 
 # Dependency order.
-MODULES = ["box.js", "bplist.js", "heif.js", "exif.js", "styles.js", "zip.js", "port.js"]
+MODULES = ["box.js", "bplist.js", "heif.js", "exif.js", "styles.js", "zip.js", "texture.js", "port.js"]
 
 IMPORT_RE = re.compile(r'^import[\s\S]*?from\s+["\'][^"\']+["\'];?[ \t]*$', re.M)
 EXPORT_BLOCK_RE = re.compile(r'^export\s*\{[^}]*\};?[ \t]*$', re.M)
@@ -39,7 +39,7 @@ def strip_module(text: str) -> str:
 core = "\n\n".join(f"// ---- {m} ----\n{strip_module((WEB / 'src' / m).read_text(encoding='utf-8'))}"
                    for m in MODULES)
 
-EXPORTS = "export { patch, selectProfile, loadProfile, discoverHeic, VERSION };"
+EXPORTS = "export { patch, selectProfile, loadProfile, discoverHeic, addTexture, VERSION };"
 (BUILD / "bundle.core.mjs").write_text(core + "\n\n" + EXPORTS + "\n", encoding="utf-8")
 
 profiles = {}
