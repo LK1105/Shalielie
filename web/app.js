@@ -11,6 +11,26 @@ const fileInput = $("file"), drop = $("drop"), list = $("list"), quality = $("qu
 let lang = pickLanguage();
 const T = (key) => t(lang, key);
 
+// Inside the iOS shell this page runs in a WKWebView with the app's local
+// PhotoOriginal plugin registered. Choosing from the Photo Library through
+// <input type=file> there hands back a JPEG that iOS transcoded on the way in —
+// which is exactly the data this tool rewrites — so the app reads the original
+// bytes through PhotoKit instead. The file input stays available as a second
+// way in, for photos that live in the Files app.
+//
+// In a browser none of this exists and every path below behaves as before.
+const native = (() => {
+  const cap = window.Capacitor;
+  if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
+  if (cap.Plugins && cap.Plugins.PhotoOriginal) return cap.Plugins.PhotoOriginal;
+  try {
+    return cap.registerPlugin("PhotoOriginal");
+  } catch (e) {
+    console.warn("PhotoOriginal plugin is not registered:", e);
+    return null;
+  }
+})();
+
 let profileIndex = null;
 const profileCache = new Map();
 
@@ -51,6 +71,17 @@ function sniff(b) {
   return "unknown";
 }
 
+/** Base64 for the finished photo, in chunks: String.fromCharCode(...bytes) on a
+ *  multi-megabyte array overflows the call stack. */
+function toBase64(bytes) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const CHUNK = 0x8000;
+  const parts = [];
+  for (let i = 0; i < view.length; i += CHUNK)
+    parts.push(String.fromCharCode.apply(null, view.subarray(i, i + CHUNK)));
+  return btoa(parts.join(""));
+}
+
 function row(name) {
   const el = document.createElement("div");
   el.className = "row";
@@ -79,6 +110,27 @@ function row(name) {
       b.addEventListener("click", async () => {
         try { await navigator.share({ files: [file] }); }
         catch (e) { if (e.name !== "AbortError") b.textContent = T("btn.blocked"); }
+      });
+      el.querySelector(".act").appendChild(b);
+    },
+    // Native-only. Hands the finished bytes to PhotoKit as a new asset, with the
+    // original filename kept, instead of going through the share sheet.
+    saveToLibrary(data, filename) {
+      const b = document.createElement("button");
+      b.className = "dl";
+      b.type = "button";
+      b.textContent = T("btn.library");
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        b.textContent = T("btn.saving");
+        try {
+          await native.save({ data: toBase64(data), name: filename });
+          b.textContent = T("btn.saved");
+        } catch (e) {
+          console.error("could not save to the photo library", filename, e);
+          b.disabled = false;
+          b.textContent = T("btn.savefailed");
+        }
       });
       el.querySelector(".act").appendChild(b);
     },
@@ -129,6 +181,9 @@ async function handleFile(file) {
     ui.set(`${T("st.ready")} — ${bits.join(sep)}`, "ok");
 
     const outName = file.name.replace(/\.(heic|heif)$/i, "") + suffix;
+    // In the app, writing straight back to the photo library is the short route
+    // and avoids a share-sheet round trip. The download stays available below.
+    if (native) ui.saveToLibrary(data, outName);
     // On iPhone the share sheet lands the file straight in Photos; elsewhere a plain
     // download is the shorter route.
     const shareFile = new File([data], outName, { type: "image/heic" });
@@ -155,11 +210,70 @@ drop.addEventListener("drop", (e) => {
   drop.classList.remove("over");
   handleFiles([...e.dataTransfer.files]);
 });
-drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("click", () => openPicker());
 drop.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPicker(); }
 });
 fileInput.addEventListener("change", () => handleFiles([...fileInput.files]));
+
+// --- native-only chrome -----------------------------------------------------
+// Built here rather than in index.html: that file is shared with the web
+// deployment and is checked against the offline asset list.
+let notice = null;
+
+if (native) {
+  const browse = document.createElement("button");
+  browse.type = "button";
+  browse.className = "dl alt";
+  browse.style.marginTop = "1rem";
+  browse.dataset.i18n = "btn.browse";
+  browse.addEventListener("click", () => fileInput.click());
+  drop.insertAdjacentElement("afterend", browse);
+
+  notice = document.createElement("p");
+  notice.className = "err";
+  notice.dataset.i18n = "err.fullaccess";
+  notice.hidden = true;
+  browse.insertAdjacentElement("afterend", notice);
+}
+
+function showNotice(key) {
+  if (!notice) return;
+  notice.dataset.i18n = key;
+  notice.hidden = false;
+  applyLanguage(lang); // fills the newly named key in the current language
+}
+
+function hideNotice() {
+  if (notice) notice.hidden = true;
+}
+
+/** Native path: read the original file bytes through PhotoKit, then hand them to
+ *  the same handleFiles() the file input uses. Nothing about the conversion
+ *  itself is duplicated here. */
+async function openPicker() {
+  if (!native) { fileInput.click(); return; }
+  hideNotice();
+  let result;
+  try {
+    result = await native.pick();
+  } catch (e) {
+    if (e && e.code === "need_full_access") { showNotice("err.fullaccess"); return; }
+    console.error("photo library pick failed", e);
+    showNotice("err.pickfailed");
+    return;
+  }
+  const files = [];
+  for (const item of result?.files || []) {
+    try {
+      const res = await fetch(item.webPath);
+      files.push(new File([await res.arrayBuffer()], item.name));
+    } catch (e) {
+      console.error("could not read the picked photo", item.name, e);
+    }
+  }
+  if (files.length) await handleFiles(files);
+}
 
 $("lang").addEventListener("click", () => {
   lang = lang === "zh" ? "en" : "zh";

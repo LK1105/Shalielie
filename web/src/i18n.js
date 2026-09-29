@@ -50,10 +50,18 @@ export const STRINGS = {
     "err.hastexture": "This photo already has the Texture and Grain controls. Nothing to do.",
     "err.nothumb": "This HEIC has no embedded thumbnail, which the browser version cannot create. "
       + "Use the command-line tool for this photo.",
+    "err.fullaccess": "Reading the original HEIC file needs full access to your photo library. "
+      + "Open <b>Settings → Shalielie → Photos</b> and choose <b>Full Access</b>, then try again.",
+    "err.pickfailed": "Couldn’t open the photo library. Use <b>Choose from Files instead</b> below.",
 
     "btn.save": "Save to Photos",
     "btn.download": "Download",
     "btn.blocked": "Couldn’t open sharing",
+    "btn.browse": "Choose from Files instead",
+    "btn.library": "Save to Photos",
+    "btn.saving": "Saving…",
+    "btn.saved": "Saved to Photos",
+    "btn.savefailed": "Couldn’t save",
 
     "h.iphone": "On iPhone",
     "s.1": "Tap the box above, choose <b>Photo Library</b>, and select your photo.",
@@ -113,10 +121,18 @@ export const STRINGS = {
     "err.unsupported": "本工具暂不兼容此 HEIC 文件。",
     "err.hastexture": "此照片已带有质感与颗粒控制，无需处理。",
     "err.nothumb": "此 HEIC 没有内嵌缩略图，网页版无法生成。请改用命令行工具处理这张照片。",
+    "err.fullaccess": "读取原始 HEIC 照片需要相册的「完全访问」权限。请打开<b>「设置」→「Shalielie」→「照片」</b>"
+      + "并选择<b>「完全访问」</b>，然后重试。",
+    "err.pickfailed": "无法打开相册。请改用下方的<b>「改从「文件」选取」</b>。",
 
     "btn.save": "存储到「照片」",
     "btn.download": "下载",
     "btn.blocked": "无法打开共享菜单",
+    "btn.browse": "改从「文件」选取",
+    "btn.library": "存入相册",
+    "btn.saving": "正在存入…",
+    "btn.saved": "已存入相册",
+    "btn.savefailed": "存入失败",
 
     "h.iphone": "在 iPhone 上",
     "s.1": "点按上方区域，选择<b>照片图库</b>，然后选取照片。",

@@ -67,6 +67,14 @@ artifact/build/
 tests/web/ref/
 
 # ---------------------------------------------------------------------------
+# iOS shell (mobile/)
+#
+# The Capacitor project's own ios/.gitignore covers the copied web assets and
+# the generated config; only the installed packages are added here.
+# ---------------------------------------------------------------------------
+mobile/node_modules/
+
+# ---------------------------------------------------------------------------
 # Editor / OS
 # ---------------------------------------------------------------------------
 .vscode/

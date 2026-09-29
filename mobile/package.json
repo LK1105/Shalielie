@@ -1,0 +1,15 @@
+{
+  "name": "shalielie-ios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Capacitor iOS shell that wraps ../web and adds the PhotoOriginal plugin",
+  "license": "MIT",
+  "scripts": {
+    "sync": "cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2"
+  }
+}

@@ -1,0 +1,119 @@
+name: iOS unsigned IPA
+
+# Builds the Capacitor shell around web/ into an unsigned .ipa on a macOS
+# runner. Nothing here signs: the artifact is meant to be signed and installed
+# by whoever owns the device. Run it from the Actions tab, or push to ios-app.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios-app]
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    # Capacitor 8 requires Xcode 26.0 or newer. macos-26 ships Xcode 26.6 as
+    # its default, so the toolchain check below is the only pinning needed.
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The web app is shared with GitHub Pages; a change made for the iOS
+      # shell must not break the browser build.
+      - name: Check the web app still passes its tests
+        run: |
+          node tests/web/check-i18n.mjs
+          node tests/web/check-pwa.mjs
+
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          node --version
+
+      - name: Sync the Capacitor project
+        working-directory: mobile
+        run: |
+          npm ci
+          npx cap sync ios
+
+      - name: List the schemes
+        run: xcodebuild -list -project mobile/ios/App/App.xcodeproj
+
+      # The project uses Swift Package Manager (Capacitor 8's default), so it is
+      # built from App.xcodeproj rather than an App.xcworkspace. Signing is
+      # switched off at the command line instead of in the project file.
+      - name: Build unsigned
+        run: |
+          xcodebuild \
+            -project mobile/ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package the IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry Shalielie-unsigned.ipa Payload
+
+      # An .ipa that unzips is not the same as an .ipa that contains the app:
+      # fail here rather than hand over a package that is missing the web
+      # bundle or a photo permission string.
+      - name: Verify the IPA
+        run: |
+          set -euo pipefail
+
+          unzip -l Shalielie-unsigned.ipa
+
+          required=(
+            "Payload/App.app/App"
+            "Payload/App.app/Info.plist"
+            "Payload/App.app/public/index.html"
+            "Payload/App.app/public/app.js"
+            "Payload/App.app/public/profiles/48-12.zip"
+            "Payload/App.app/public/profiles/45-15.zip"
+          )
+          listing=$(unzip -l Shalielie-unsigned.ipa)
+          for entry in "${required[@]}"; do
+            if ! grep -qF "$entry" <<<"$listing"; then
+              echo "::error::the IPA is missing $entry"
+              exit 1
+            fi
+          done
+
+          rm -rf verify
+          unzip -q Shalielie-unsigned.ipa -d verify
+          python3 - <<'PY'
+          import plistlib
+          import sys
+
+          with open("verify/Payload/App.app/Info.plist", "rb") as handle:
+              info = plistlib.load(handle)
+
+          keys = ("NSPhotoLibraryUsageDescription", "NSPhotoLibraryAddUsageDescription")
+          missing = [key for key in keys if not info.get(key)]
+          if missing:
+              print("::error::Info.plist is missing " + ", ".join(missing))
+              sys.exit(1)
+          for key in keys:
+              print(f"{key} = {info[key]}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Shalielie-unsigned-ipa
+          path: Shalielie-unsigned.ipa
+          if-no-files-found: error
