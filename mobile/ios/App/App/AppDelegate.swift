@@ -102,7 +102,9 @@ public class PhotoOriginalPlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewContr
                 }
 
                 self.pendingPick = call
-                let configuration = PHPickerConfiguration(photoLibrary: .shared())
+                // A mutable binding is required: PHPickerConfiguration only
+                // lets filter and selectionLimit be assigned through one.
+                var configuration = PHPickerConfiguration(photoLibrary: .shared())
                 configuration.filter = .images
                 configuration.selectionLimit = 0
                 let picker = PHPickerViewController(configuration: configuration)
