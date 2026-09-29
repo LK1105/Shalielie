@@ -20,6 +20,10 @@
 //   err.*        failures a visitor can see
 //   btn.*        buttons on a finished row
 //   h.* s.* p.*  the notes at the bottom: heading, numbered step, paragraph
+//
+// btn.browse, btn.library, btn.saving, btn.saved, btn.savefailed and
+// err.fullaccess, err.pickfailed are shown only by the iOS app, which builds
+// those extra controls at runtime; a browser never renders them.
 
 export const STRINGS = {
   en: {
